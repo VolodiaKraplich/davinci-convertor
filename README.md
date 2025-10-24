@@ -187,7 +187,3 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
-
-## Acknowledgments
-
-Built with Go and powered by FFmpeg for reliable, high-quality video processing.
