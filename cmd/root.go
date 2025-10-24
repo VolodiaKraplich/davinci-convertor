@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,15 +17,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type ConversionMode string
+
+const (
+	ModeEditing ConversionMode = "editing"
+	ModeExport  ConversionMode = "export"
+)
+
 type Action int
 
 const (
 	ActionSkip Action = iota
 	ActionRewrap
-	ActionConvertAudio
-	ActionConvertVideo
-	ActionFullConvert
-	ActionUnsupported
+	ActionConvert
 )
 
 type Stream struct {
@@ -42,12 +47,12 @@ type Stats struct {
 	Success   int
 	Failed    int
 	Skipped   int
-	Rewrapped int
 	StartTime time.Time
 }
 
-var config struct {
+type Config struct {
 	OutputDir string
+	Mode      ConversionMode
 	Codec     string
 	Quality   string
 	Verbose   bool
@@ -55,14 +60,17 @@ var config struct {
 	Workers   int
 }
 
+var config Config
+
 var rootCmd = &cobra.Command{
 	Use:   "davinci-convert <file_or_directory>",
-	Short: "A smart, high-performance tool to prepare media for DaVinci Resolve.",
-	Long: `Smart DaVinci Resolve Converter analyzes media files and intelligently
-converts them to editing-friendly formats like DNxHR or ProRes.
+	Short: "Universal converter for DaVinci Resolve and video export",
+	Long: `Converts video for editing in DaVinci Resolve or exports
+finished videos to optimal universal format.
 
-It avoids unnecessary transcoding by skipping compatible files or simply
-rewrapping containers, saving time and preserving quality.`,
+Modes:
+  editing - Converts to DNxHR/ProRes for editing
+  export  - Exports to H.264 for universal compatibility`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runConverter(args[0])
@@ -77,42 +85,36 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.Flags().StringVarP(&config.OutputDir, "output-dir", "o", "", "Output directory for converted files (default: same as source)")
-	rootCmd.Flags().StringVar(&config.Codec, "codec", "dnxhr", "Target video codec: 'dnxhr' or 'prores'")
-	rootCmd.Flags().StringVar(&config.Quality, "quality", "hq", "Video quality profile (for dnxhr: low, medium, hq, hqx; for prores: proxy, lt, sq, hq)")
-	rootCmd.Flags().BoolVarP(&config.Verbose, "verbose", "v", false, "Verbose output (show ffmpeg/ffprobe logs)")
-	rootCmd.Flags().BoolVarP(&config.Force, "force", "f", false, "Force overwrite of existing files")
-	rootCmd.Flags().IntVarP(&config.Workers, "workers", "w", runtime.NumCPU(), "Number of parallel conversion jobs")
+	rootCmd.Flags().StringVarP(&config.OutputDir, "output-dir", "o", "", "Output directory for converted files")
+	rootCmd.Flags().StringVar((*string)(&config.Mode), "mode", "editing", "Mode: 'editing' or 'export'")
+	rootCmd.Flags().StringVar(&config.Codec, "codec", "dnxhr", "Codec for editing: 'dnxhr' or 'prores'")
+	rootCmd.Flags().StringVar(&config.Quality, "quality", "hq", "Quality for editing: hq, hqx")
+	rootCmd.Flags().BoolVarP(&config.Verbose, "verbose", "v", false, "Verbose output")
+	rootCmd.Flags().BoolVarP(&config.Force, "force", "f", false, "Force overwrite existing files")
+	rootCmd.Flags().IntVarP(&config.Workers, "workers", "w", runtime.NumCPU(), "Number of parallel jobs")
 }
 
 func checkDependencies() {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		printError("ffmpeg is not installed or not in PATH")
-		os.Exit(1)
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		printError("ffprobe is not installed or not in PATH")
-		os.Exit(1)
+	for _, tool := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			printError(fmt.Sprintf("%s is not installed", tool))
+			os.Exit(1)
+		}
 	}
 }
 
 func validateConfig() error {
-	if config.Codec != "dnxhr" && config.Codec != "prores" {
-		return fmt.Errorf("invalid codec '%s'. Must be 'dnxhr' or 'prores'", config.Codec)
+	if config.Mode != ModeEditing && config.Mode != ModeExport {
+		return fmt.Errorf("invalid mode '%s'", config.Mode)
 	}
 
-	validQualities := map[string][]string{
-		"dnxhr":  {"low", "medium", "hq", "hqx"},
-		"prores": {"proxy", "lt", "sq", "hq"},
-	}
-
-	qualities := validQualities[config.Codec]
-	for _, q := range qualities {
-		if config.Quality == q {
-			return nil
+	if config.Mode == ModeEditing {
+		if config.Codec != "dnxhr" && config.Codec != "prores" {
+			return fmt.Errorf("invalid codec '%s'", config.Codec)
 		}
 	}
-	return fmt.Errorf("invalid quality '%s' for codec '%s'. Valid options are: %v", config.Quality, config.Codec, qualities)
+
+	return nil
 }
 
 func runConverter(rootPath string) {
@@ -124,11 +126,11 @@ func runConverter(rootPath string) {
 
 	files, err := findMediaFiles(rootPath)
 	if err != nil {
-		printError(fmt.Sprintf("Error accessing path %s: %v", rootPath, err))
+		printError(fmt.Sprintf("Error accessing path: %v", err))
 		os.Exit(1)
 	}
 	if len(files) == 0 {
-		printWarning("No media files found to process.")
+		printWarning("No media files found")
 		return
 	}
 
@@ -136,7 +138,7 @@ func runConverter(rootPath string) {
 	jobs := make(chan string, len(files))
 	var wg sync.WaitGroup
 
-	color.Magenta("🚀 Starting conversion with %d parallel workers...\n", config.Workers)
+	color.Magenta("🚀 Starting conversion with %d workers...\n", config.Workers)
 
 	for i := 0; i < config.Workers; i++ {
 		wg.Add(1)
@@ -180,236 +182,195 @@ func findMediaFiles(path string) ([]string, error) {
 
 func isMediaFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
-	mediaExts := map[string]bool{
-		".mov": true, ".mp4": true, ".mxf": true, ".avi": true,
-		".mkv": true, ".wmv": true, ".flv": true,
-	}
-	return mediaExts[ext]
+	mediaExts := []string{".mov", ".mp4", ".mxf", ".avi", ".mkv", ".wmv", ".flv", ".m4v", ".webm"}
+	return slices.Contains(mediaExts, ext)
 }
 
 func worker(wg *sync.WaitGroup, jobs <-chan string, stats *Stats) {
 	defer wg.Done()
 	for file := range jobs {
-		action, err := analyzeFile(file)
-		if err != nil {
+		if err := processFile(file, stats); err != nil {
 			stats.Lock()
 			stats.Failed++
 			stats.Unlock()
-			printError(fmt.Sprintf("Failed to analyze %s: %v", file, err))
-			continue
+			printError(fmt.Sprintf("%s: %v", filepath.Base(file), err))
 		}
-
-		outputPath := getOutputPath(file)
-		if !config.Force {
-			if _, err := os.Stat(outputPath); err == nil {
-				stats.Lock()
-				stats.Failed++
-				stats.Unlock()
-				printError(fmt.Sprintf("Output file exists: %s (use --force to overwrite)", outputPath))
-				continue
-			}
-		}
-
-		outputDir := filepath.Dir(outputPath)
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			stats.Lock()
-			stats.Failed++
-			stats.Unlock()
-			printError(fmt.Sprintf("Failed to create output directory %s: %v", outputDir, err))
-			continue
-		}
-
-		if action == ActionSkip {
-			stats.Lock()
-			stats.Skipped++
-			stats.Unlock()
-			color.Green("✓ Skipping %s (already compatible)", file)
-			continue
-		}
-
-		cmdArgs := buildFFmpegCommand(file, outputPath, action)
-		cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-
-		var stderr, stdout bytes.Buffer
-		if config.Verbose {
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-		} else {
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-		}
-
-		if err := cmd.Run(); err != nil {
-			stats.Lock()
-			stats.Failed++
-			stats.Unlock()
-			errMsg := stderr.String()
-			if errMsg == "" {
-				errMsg = stdout.String()
-			}
-			printError(fmt.Sprintf("Conversion failed for %s: %v\n%s", file, err, errMsg))
-			continue
-		}
-
-		stats.Lock()
-		if action == ActionRewrap {
-			stats.Rewrapped++
-		} else {
-			stats.Success++
-		}
-		stats.Unlock()
-
-		color.Cyan("→ Processed %s [%s]", file, actionToString(action))
 	}
 }
 
+func processFile(file string, stats *Stats) error {
+	action, err := analyzeFile(file)
+	if err != nil {
+		return fmt.Errorf("analysis failed: %w", err)
+	}
+
+	outputPath := getOutputPath(file)
+
+	if !config.Force {
+		if _, err := os.Stat(outputPath); err == nil {
+			return fmt.Errorf("file exists (use --force to overwrite)")
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	if action == ActionSkip {
+		stats.Lock()
+		stats.Skipped++
+		stats.Unlock()
+		color.Green("✓ Skipped: %s (already compatible)", filepath.Base(file))
+		return nil
+	}
+
+	if err := convert(file, outputPath, action); err != nil {
+		return err
+	}
+
+	stats.Lock()
+	stats.Success++
+	stats.Unlock()
+
+	color.Cyan("→ Processed: %s", filepath.Base(file))
+	return nil
+}
+
 func analyzeFile(file string) (Action, error) {
+	probe, err := runFFProbe(file)
+	if err != nil {
+		return ActionSkip, err
+	}
+
+	var videoStream *Stream
+	for i := range probe.Streams {
+		if probe.Streams[i].CodecType == "video" {
+			videoStream = &probe.Streams[i]
+			break
+		}
+	}
+
+	if videoStream == nil {
+		return ActionSkip, fmt.Errorf("no video stream found")
+	}
+
+	if config.Mode == ModeExport {
+		if videoStream.CodecName == "h264" && strings.ToLower(filepath.Ext(file)) == ".mp4" {
+			return ActionSkip, nil
+		}
+		return ActionConvert, nil
+	}
+
+	// Editing mode
+	targetCodec := getTargetVideoCodec()
+	if videoStream.CodecName == targetCodec {
+		if strings.ToLower(filepath.Ext(file)) == ".mov" {
+			return ActionSkip, nil
+		}
+		return ActionRewrap, nil
+	}
+
+	return ActionConvert, nil
+}
+
+func runFFProbe(file string) (*FFProbeOutput, error) {
 	cmd := exec.Command("ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", file)
 	var out bytes.Buffer
 	cmd.Stdout = &out
+
 	if err := cmd.Run(); err != nil {
-		return ActionUnsupported, fmt.Errorf("ffprobe failed: %w", err)
+		return nil, fmt.Errorf("ffprobe failed: %w", err)
 	}
 
 	var probe FFProbeOutput
 	if err := json.Unmarshal(out.Bytes(), &probe); err != nil {
-		return ActionUnsupported, fmt.Errorf("invalid ffprobe output: %w", err)
+		return nil, fmt.Errorf("invalid ffprobe output: %w", err)
 	}
 
-	var videoCodec, audioCodec string
-	hasVideo, hasAudio := false, false
-	for _, stream := range probe.Streams {
-		if stream.CodecType == "video" {
-			videoCodec = stream.CodecName
-			hasVideo = true
-		} else if stream.CodecType == "audio" {
-			audioCodec = stream.CodecName
-			hasAudio = true
-		}
-	}
-
-	if !hasVideo {
-		return ActionUnsupported, fmt.Errorf("no video stream found")
-	}
-
-	targetVideoCodec, acceptableAudioCodecs := getTargetCodecs()
-	videoMatch := videoCodec == targetVideoCodec
-	audioMatch := !hasAudio || isAcceptableAudio(audioCodec, acceptableAudioCodecs)
-	containerMatch := strings.ToLower(filepath.Ext(file)) == ".mov"
-
-	if videoMatch && audioMatch && containerMatch {
-		return ActionSkip, nil
-	}
-	if videoMatch && audioMatch {
-		return ActionRewrap, nil
-	}
-	if videoMatch {
-		return ActionConvertAudio, nil
-	}
-	if audioMatch {
-		return ActionConvertVideo, nil
-	}
-	return ActionFullConvert, nil
+	return &probe, nil
 }
 
-func getTargetCodecs() (string, []string) {
-	if config.Codec == "dnxhr" {
-		return "dnxhd", []string{"pcm_s16le", "pcm_s24le", "pcm_s32le"}
-	}
-	return "prores", []string{"aac"}
-}
+func convert(file, outputPath string, action Action) error {
+	args := buildFFmpegCommand(file, outputPath, action)
+	cmd := exec.Command(args[0], args[1:]...)
 
-func isAcceptableAudio(codec string, acceptable []string) bool {
-	for _, c := range acceptable {
-		if codec == c {
-			return true
-		}
-	}
-	return false
-}
-
-func buildFFmpegCommand(file, outputPath string, action Action) []string {
-	baseArgs := []string{"ffmpeg", "-y", "-i", file, "-map_metadata", "0"}
-
-	switch action {
-	case ActionRewrap:
-		return append(baseArgs, "-c", "copy", outputPath)
-
-	case ActionConvertAudio:
-		audioCodec := getAudioCodec()
-		return append(baseArgs, "-c:v", "copy", "-c:a", audioCodec, outputPath)
-
-	case ActionConvertVideo, ActionFullConvert:
-		args := append(baseArgs, getVideoCodecParams()...)
-		args = append(args,
-			"-map", "0:v:0",
-			"-map", "0:a?",
-			"-sws_flags", "lanczos",
-			"-movflags", "+faststart",
-		)
-
-		if action == ActionFullConvert {
-			audioCodec := getAudioCodec()
-			args = append(args, "-c:a", audioCodec)
-			if audioCodec == "aac" {
-				args = append(args, "-b:a", "320k")
-			}
-		} else {
-			args = append(args, "-c:a", "copy")
-		}
-
-		return append(args, outputPath)
+	if config.Verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stderr = &bytes.Buffer{}
 	}
 
-	return baseArgs
-}
-
-func getAudioCodec() string {
-	if config.Codec == "prores" {
-		return "aac"
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("conversion failed: %w", err)
 	}
-	return "pcm_s16le"
-}
 
-func getVideoCodecParams() []string {
-	switch config.Codec {
-	case "dnxhr":
-		return []string{
-			"-c:v", "dnxhd",
-			"-profile:v", getDNxHRProfile(),
-			"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-			"-pix_fmt", "yuv422p",
-		}
-	case "prores":
-		return []string{
-			"-c:v", "prores_ks",
-			"-profile:v", getProResProfile(),
-			"-vendor", "ap10",
-			"-pix_fmt", "yuv422p10le",
-			"-qscale:v", "11",
-		}
-	}
 	return nil
 }
 
-func getDNxHRProfile() string {
-	profiles := map[string]string{
-		"low":    "dnxhr_lb",
-		"medium": "dnxhr_sq",
-		"hq":     "dnxhr_hq",
-		"hqx":    "dnxhr_444",
+func buildFFmpegCommand(file, outputPath string, action Action) []string {
+	args := []string{"ffmpeg", "-y", "-i", file}
+
+	if action == ActionRewrap {
+		return append(args, "-c", "copy", "-map_metadata", "0", outputPath)
 	}
-	return profiles[config.Quality]
+
+	if config.Mode == ModeExport {
+		return append(args, buildExportParams(outputPath)...)
+	}
+
+	return append(args, buildEditingParams(outputPath)...)
 }
 
-func getProResProfile() string {
-	profiles := map[string]string{
-		"proxy": "0",
-		"lt":    "1",
-		"sq":    "2",
-		"hq":    "3",
+func buildExportParams(outputPath string) []string {
+	return []string{
+		"-map", "0:v:0",
+		"-map", "0:a?",
+		"-map_metadata", "0",
+		"-c:v", "libx264",
+		"-preset", "slow",
+		"-crf", "18",
+		"-pix_fmt", "yuv420p",
+		"-c:a", "aac",
+		"-b:a", "320k",
+		"-movflags", "+faststart",
+		outputPath,
 	}
-	return profiles[config.Quality]
+}
+
+func buildEditingParams(outputPath string) []string {
+	params := []string{"-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0"}
+
+	if config.Codec == "dnxhr" {
+		profile := map[string]string{
+			"hq":  "dnxhr_hq",
+			"hqx": "dnxhr_444",
+		}[config.Quality]
+
+		params = append(params,
+			"-c:v", "dnxhd",
+			"-profile:v", profile,
+			"-pix_fmt", "yuv422p",
+			"-c:a", "pcm_s16le",
+		)
+	} else {
+		params = append(params,
+			"-c:v", "prores_ks",
+			"-profile:v", "3",
+			"-vendor", "ap10",
+			"-pix_fmt", "yuv422p10le",
+			"-c:a", "pcm_s16le",
+		)
+	}
+
+	return append(params, "-movflags", "+faststart", outputPath)
+}
+
+func getTargetVideoCodec() string {
+	if config.Codec == "dnxhr" {
+		return "dnxhd"
+	}
+	return "prores"
 }
 
 func getOutputPath(file string) string {
@@ -417,31 +378,31 @@ func getOutputPath(file string) string {
 	if config.OutputDir != "" {
 		dir = config.OutputDir
 	}
-	base := filepath.Base(file)
-	ext := filepath.Ext(base)
-	base = base[:len(base)-len(ext)] + "_converted.mov"
-	return filepath.Join(dir, base)
-}
 
-func actionToString(action Action) string {
-	actions := map[Action]string{
-		ActionSkip:         "SKIP",
-		ActionRewrap:       "REWRAP",
-		ActionConvertAudio: "CONVERT_AUDIO",
-		ActionConvertVideo: "CONVERT_VIDEO",
-		ActionFullConvert:  "FULL_CONVERT",
+	base := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+
+	var suffix, ext string
+	if config.Mode == ModeExport {
+		suffix = "_export"
+		ext = ".mp4"
+	} else {
+		suffix = "_converted"
+		ext = ".mov"
 	}
-	if str, ok := actions[action]; ok {
-		return str
-	}
-	return "UNSUPPORTED"
+
+	return filepath.Join(dir, base+suffix+ext)
 }
 
 func printHeader() {
 	color.Cyan("========================================")
-	color.Cyan("  Smart DaVinci Resolve Converter")
+	color.Cyan("  DaVinci Converter")
 	color.Cyan("========================================")
-	color.Yellow("Codec: %s | Quality: %s | Workers: %d", config.Codec, config.Quality, config.Workers)
+	if config.Mode == ModeExport {
+		color.Yellow("Mode: Export | Workers: %d", config.Workers)
+	} else {
+		color.Yellow("Mode: Editing | Codec: %s | Quality: %s | Workers: %d",
+			config.Codec, config.Quality, config.Workers)
+	}
 	if config.OutputDir != "" {
 		color.Yellow("Output directory: %s", config.OutputDir)
 	}
@@ -449,11 +410,11 @@ func printHeader() {
 }
 
 func printError(msg string) {
-	color.Red("❌ Error: %s", msg)
+	color.Red("✗ Error: %s", msg)
 }
 
 func printWarning(msg string) {
-	color.Yellow("⚠️ Warning: %s", msg)
+	color.Yellow("⚠️  Warning: %s", msg)
 }
 
 func printStats(stats *Stats) {
@@ -461,8 +422,5 @@ func printStats(stats *Stats) {
 	color.Cyan("\n========================================")
 	color.Green("✓ Completed in %v", elapsed.Round(time.Second))
 	color.Cyan("Total: %d | Success: %d | Skipped: %d | Failed: %d",
-		stats.Total, stats.Success+stats.Rewrapped, stats.Skipped, stats.Failed)
-	if stats.Rewrapped > 0 {
-		color.Cyan("Rewrapped: %d", stats.Rewrapped)
-	}
+		stats.Total, stats.Success, stats.Skipped, stats.Failed)
 }

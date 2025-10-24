@@ -37,6 +37,7 @@ $(BIN_DIR):
 clean:
 	@echo "Cleaning build artifacts..."
 	rm -rf $(BIN_DIR)
+	rm -f $(BINARY).{bash,zsh,fish}
 	$(GO) clean -cache -modcache
 	@echo "Cleanup completed"
 
@@ -45,23 +46,57 @@ fmt:
 	$(GO) fmt ./...
 	@echo "Code formatted"
 
-install-autocompletion: build
-	@echo "Generating Fish shell completion..."
+completions: build
+	@echo "Generating shell completions..."
+	$(BIN_DIR)/$(BINARY) completion bash > $(BINARY).bash
+	$(BIN_DIR)/$(BINARY) completion zsh > $(BINARY).zsh
 	$(BIN_DIR)/$(BINARY) completion fish > $(BINARY).fish
-	mkdir -p ~/.config/fish/completions
-	cp $(BINARY).fish ~/.config/fish/completions/
-	@echo "Fish shell completion installed."
+	@echo "Shell completions generated: $(BINARY).{bash,zsh,fish}"
+
+install-completions: completions
+	@echo "Installing shell completions..."
+	@# Bash completion
+	@if [ -d /usr/share/bash-completion/completions ]; then \
+		install -Dm644 $(BINARY).bash /usr/share/bash-completion/completions/$(BINARY); \
+		echo "Bash completion installed to /usr/share/bash-completion/completions/"; \
+	elif [ -d ~/.local/share/bash-completion/completions ]; then \
+		install -Dm644 $(BINARY).bash ~/.local/share/bash-completion/completions/$(BINARY); \
+		echo "Bash completion installed to ~/.local/share/bash-completion/completions/"; \
+	else \
+		mkdir -p ~/.local/share/bash-completion/completions; \
+		install -Dm644 $(BINARY).bash ~/.local/share/bash-completion/completions/$(BINARY); \
+		echo "Bash completion installed to ~/.local/share/bash-completion/completions/"; \
+	fi
+	@# Zsh completion
+	@if [ -d /usr/share/zsh/site-functions ]; then \
+		install -Dm644 $(BINARY).zsh /usr/share/zsh/site-functions/_$(BINARY); \
+		echo "Zsh completion installed to /usr/share/zsh/site-functions/"; \
+	else \
+		mkdir -p ~/.local/share/zsh/site-functions; \
+		install -Dm644 $(BINARY).zsh ~/.local/share/zsh/site-functions/_$(BINARY); \
+		echo "Zsh completion installed to ~/.local/share/zsh/site-functions/"; \
+		echo "Add this to your .zshrc if not already present:"; \
+		echo "  fpath=(~/.local/share/zsh/site-functions \$$fpath)"; \
+	fi
+	@# Fish completion
+	@mkdir -p ~/.config/fish/completions
+	@install -Dm644 $(BINARY).fish ~/.config/fish/completions/$(BINARY).fish
+	@echo "Fish completion installed to ~/.config/fish/completions/"
+	@echo ""
+	@echo "Shell completions installed successfully!"
+	@echo "You may need to restart your shell or source the completion files."
 
 help:
 	@echo ""
 	@echo "$(PROJECT_NAME) Makefile"
 	@echo "Usage: make [target]"
 	@echo ""
-	@echo "  build                Build and compress binary with UPX"
-	@echo "  clean                Clean build artifacts"
-	@echo "  fmt                  Format Go code"
-	@echo "  install-autocompletion Install Fish completion"
-	@echo "  help                 Show this help"
+	@echo "  build                 Build and compress binary with UPX"
+	@echo "  clean                 Clean build artifacts and completions"
+	@echo "  fmt                   Format Go code"
+	@echo "  completions           Generate shell completions (bash, zsh, fish)"
+	@echo "  install-completions   Install shell completions to system/user directories"
+	@echo "  help                  Show this help"
 	@echo ""
 
-.PHONY: build clean fmt install-autocompletion help
+.PHONY: build clean fmt completions install-completions help
