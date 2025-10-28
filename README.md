@@ -73,10 +73,8 @@ cargo build --release
 
 ### Basic Syntax
 
-```
-
+```bash
 davinci-converter <FILE_OR_DIRECTORY> [FLAGS]
-
 ```
 
 ### Examples

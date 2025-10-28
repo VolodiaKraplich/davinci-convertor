@@ -28,8 +28,6 @@ package() {
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
     # --- Generate and install shell completions ---
-    # The binary must be run from the build directory (`target/release`)
-    # before it is installed into the final package root (`$pkgdir`).
     local bin_path="target/release/$pkgname"
 
     # Bash completion
