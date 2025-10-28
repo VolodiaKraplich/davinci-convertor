@@ -1,6 +1,6 @@
 # Maintainer: Volodia Kraplich
 pkgname=davinci-convertor
-pkgver=2.0.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Smart, high-performance tool to prepare media for DaVinci Resolve"
 arch=('x86_64' 'aarch64')
