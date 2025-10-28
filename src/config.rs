@@ -24,7 +24,7 @@ impl Config {
       .context("Input path is required for the main application logic.")?;
 
     let config = Self {
-      path, // Now 'path' is a confirmed PathBuf
+      path,
       output_dir: args.output_dir,
       mode: args.mode,
       codec: args.codec,

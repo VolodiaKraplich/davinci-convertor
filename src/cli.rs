@@ -17,7 +17,6 @@ pub struct Args {
   pub command: Option<Commands>,
 
   /// Input file or directory to process
-  // REMOVED: `required_unless_present` to allow subcommands to parse without needing <PATH>.
   // The requirement is now handled manually in `handle_cli`.
   #[arg(value_name = "PATH")]
   pub path: Option<PathBuf>,
