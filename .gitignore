@@ -1,6 +1,6 @@
-/bin
 /*.fish
 /*.bash
 /*.zsh
 /*.pkg.tar.zst
 /pkg
+/target

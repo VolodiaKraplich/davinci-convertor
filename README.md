@@ -1,10 +1,10 @@
 # 🧠 Smart DaVinci Resolve Converter
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.1%2B-blue.svg)](https://golang.org)
+[![Rust Version](https://img.shields.io/badge/Rust-1.90%2B-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey.svg)](https://shields.io/)
 
-A smart, high-performance CLI tool for batch-optimizing video files for DaVinci Resolve editing and exporting finished projects on Linux and macOS.
+A smart, high-performance CLI tool for batch-optimizing video files for DaVinci Resolve editing and exporting finished projects on Linux and macOS. Built with Rust for maximum performance and safety.
 
 This utility automates the tedious process of preparing media for editing and exporting finished videos. Instead of blindly transcoding everything, it analyzes each file and applies only the necessary changes, ensuring a fast and quality-preserving workflow.
 
@@ -18,12 +18,12 @@ Additionally, when exporting finished projects, you often need to convert to uni
 
 ## Key Features
 
-- **🧠 Intelligent Analysis:** Uses `ffprobe` to inspect each file's video/audio streams and container
-- **⚡️ Efficient Operations:** Skips compatible files or performs rewrapping when codecs are compatible but container is not
-- **🚀 Concurrent Processing:** Utilizes all available CPU cores to process multiple files in parallel, drastically reducing wait times
-- **🎬 Professional Codecs:** Transcodes to **DNxHR** or **Apple ProRes** for smooth, professional editing
-- **📤 Export Mode:** Converts finished edits to H.264/MP4 with optimal settings for universal compatibility
-- **📂 Flexible Workflow:** Supports custom output directories, codec profiles, quality settings, and parallel workers
+- **🧠 Intelligent Analysis:** Uses `ffprobe` to inspect each file's video/audio streams and container.
+- **⚡️ Efficient Operations:** Skips compatible files or performs rewrapping when codecs are compatible but the container is not.
+- **🚀 Concurrent Processing:** Leverages Rust's fearless concurrency (via `rayon`) to process multiple files in parallel, drastically reducing wait times.
+- **🎬 Professional Codecs:** Transcodes to **DNxHR** or **Apple ProRes** for smooth, professional editing.
+- **📤 Export Mode:** Converts finished edits to H.264/MP4 with optimal settings for universal compatibility.
+- **📂 Flexible Workflow:** Supports custom output directories, codec profiles, quality settings, and parallel workers, powered by the `clap` argument parser.
 
 ---
 
@@ -31,8 +31,15 @@ Additionally, when exporting finished projects, you often need to convert to uni
 
 ### Prerequisites
 
-- **Go** (version 1.25.1 or newer)
-- **FFmpeg** (which includes `ffprobe`) must be installed and available in your system's PATH
+- **Rust** (version 1.90 or newer)
+- **FFmpeg** (which includes `ffprobe`) must be installed and available in your system's PATH.
+
+**Install Rust:**
+
+```bash
+# The recommended way to install Rust is via rustup
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
 
 **Install FFmpeg:**
 
@@ -40,8 +47,8 @@ Additionally, when exporting finished projects, you often need to convert to uni
 # On Debian/Ubuntu
 sudo apt update && sudo apt install ffmpeg
 
-# On Arch Linux Based
-sudo pacman -Sy ffmpeg
+# On Arch Linux
+sudo pacman -Syu ffmpeg
 
 # On macOS (using Homebrew)
 brew install ffmpeg
@@ -51,11 +58,13 @@ brew install ffmpeg
 
 ```bash
 # Clone the repository
-git clone https://github.com/VolodiaKraplich/davinci-convertor.git
-cd davinci-convertor
+git clone https://github.com/VolodiaKraplich/davinci-converter.git
+cd davinci-converter
 
-# Build the binary
-make build
+# Build the optimized release binary
+cargo build --release
+
+# The executable will be available at ./target/release/davinci-converter
 ```
 
 ---
@@ -65,7 +74,9 @@ make build
 ### Basic Syntax
 
 ```
-davinci-convert <file_or_directory> [flags]
+
+davinci-converter <FILE_OR_DIRECTORY> [FLAGS]
+
 ```
 
 ### Examples
@@ -75,30 +86,30 @@ davinci-convert <file_or_directory> [flags]
 1.  **Convert a single file using default settings (DNxHR HQ):**
 
     ```bash
-    davinci-convert my_video.mp4
+    davinci-converter my_video.mp4
     ```
 
 2.  **Recursively process all videos in a directory:**
 
     ```bash
-    davinci-convert ./path/to/my/footage/
+    davinci-converter ./path/to/my/footage/
     ```
 
 3.  **Convert to ProRes and save to a dedicated proxy directory:**
 
     ```bash
-    davinci-convert ./raw_footage/ -o ./proxies/ --codec prores
+    davinci-converter ./raw_footage/ -o ./proxies/ --codec prores
     ```
 
 4.  **Convert to the highest quality DNxHR using 12 parallel workers:**
 
     ```bash
-    davinci-convert ./source/ --codec dnxhr --quality hqx --workers 12
+    davinci-converter ./source/ --codec dnxhr --quality hqx --workers 12
     ```
 
 5.  **Force overwrite existing files and show detailed FFmpeg logs:**
     ```bash
-    davinci-convert video.mkv -f -v
+    davinci-converter video.mkv -f -v
     ```
 
 #### Export Mode
@@ -106,33 +117,38 @@ davinci-convert <file_or_directory> [flags]
 6.  **Export finished edits to H.264/MP4 for distribution:**
 
     ```bash
-    davinci-convert ./finished_edits/ --mode export -o ./exports/
+    davinci-converter ./finished_edits/ --mode export -o ./exports/
     ```
 
 7.  **Export with verbose output and force overwrite:**
     ```bash
-    davinci-convert final_project.mov --mode export -f -v
+    davinci-converter final_project.mov --mode export -f -v
     ```
 
 ### All Flags
 
 ```
-  --mode string
-        Conversion mode: 'editing' or 'export' (default "editing")
-  --codec string
-        Target video codec for editing mode: 'dnxhr' or 'prores' (default "dnxhr")
-  --quality string
-        Video quality profile for editing mode:
-        - for dnxhr: hq, hqx (default "hq")
-        - for prores: standard ProRes profile is used
-  -o, --output-dir string
-        Output directory for converted files (default: same as source)
-  -f, --force
-        Force overwrite of existing files
-  -v, --verbose
-        Verbose output (show ffmpeg/ffprobe logs)
-  -w, --workers int
-        Number of parallel conversion jobs (default: number of CPU cores)
+--mode <MODE>
+Conversion mode: 'editing' or 'export' [default: editing]
+
+--codec <CODEC>
+Target video codec for editing mode: 'dnxhr' or 'prores' [default: dnxhr]
+
+--quality <QUALITY>
+Video quality profile for editing mode. - for dnxhr: hq, hqx [default: hq] - for prores: standard ProRes profile is used
+
+-o, --output-dir <OUTPUT_DIR>
+Output directory for converted files [default: same as source]
+
+-f, --force
+Force overwrite of existing files
+
+-v, --verbose
+Verbose output (show ffmpeg/ffprobe logs)
+
+-w, --workers <WORKERS>
+Number of parallel conversion jobs [default: number of CPU cores]
+
 ```
 
 ---
@@ -141,40 +157,40 @@ davinci-convert <file_or_directory> [flags]
 
 The tool follows this workflow for each file:
 
-1.  **Analyze:** Runs `ffprobe` to get codec and container information
+1.  **Analyze:** Runs `ffprobe` using Rust's `std::process::Command` to get codec and container information.
 2.  **Decide:** Based on the analysis and mode, it chooses one of the following actions:
-    - **SKIP:** The file is already fully compatible with the target format
-    - **REWRAP:** Codecs are compatible, but the container is not (e.g., `.mkv` → `.mov`). The streams are copied into the target container without re-encoding, which is nearly instantaneous
-    - **CONVERT:** The file needs transcoding to the target format
-3.  **Execute:** Runs the appropriate `ffmpeg` command to perform the chosen action
+    - **SKIP:** The file is already fully compatible with the target format.
+    - **REWRAP:** Codecs are compatible, but the container is not (e.g., `.mkv` → `.mov`). The streams are copied into the target container without re-encoding, which is nearly instantaneous.
+    - **CONVERT:** The file needs transcoding to the target format.
+3.  **Execute:** Spawns the appropriate `ffmpeg` child process to perform the chosen action.
 
 ### Editing Mode
 
 Converts videos to editing-friendly formats:
 
-- **DNxHR:** Professional intermediate codec with HQ (high quality) or HQX (highest quality) profiles
-- **ProRes:** Apple's professional codec for high-quality editing
-- Output: `.mov` container with PCM audio
+- **DNxHR:** Professional intermediate codec with HQ (high quality) or HQX (highest quality) profiles.
+- **ProRes:** Apple's professional codec for high-quality editing.
+- **Output:** `.mov` container with PCM audio.
 
 ### Export Mode
 
-Converts videos to universally compatible distribution format:
+Converts videos to a universally compatible distribution format:
 
 - **Codec:** H.264 (libx264)
-- **Quality:** CRF 18 with slow preset for excellent quality
-- **Audio:** AAC at 320kbps
-- **Container:** MP4 with fast-start for web streaming
-- Output: `_export.mp4` files
+- **Quality:** CRF 18 with slow preset for excellent quality.
+- **Audio:** AAC at 320kbps.
+- **Container:** MP4 with fast-start for web streaming.
+- **Output:** `_export.mp4` files.
 
 ---
 
 ## Performance
 
-The tool automatically uses all available CPU cores by default, providing significant speedup for batch operations:
+This tool is designed for speed. By default, it leverages all available CPU cores to process files in parallel, providing a significant speedup for batch operations. You can fine-tune the level of parallelism with the `--workers` flag.
 
-- Single file: Processes immediately
-- Multiple files: Parallel processing based on available cores
-- Custom worker count: Use `--workers` flag to control parallelism
+- **Single file:** Processes immediately.
+- **Multiple files:** Parallel processing based on available cores.
+- **Custom worker count:** Use the `--workers` flag to control concurrency.
 
 ---
 
